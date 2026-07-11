@@ -100,10 +100,18 @@ func parseBytes(ctx context.Context, body []byte, pageURL *url.URL) (Result, err
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
+	// Remove explicit tag and class/id/role noise before Readability scores the
+	// document. Some Readability transformations discard attributes while
+	// retaining their text, which would make post-processing too late.
+	sanitizeArticleNode(document, pageURL)
+	var sanitizedInput bytes.Buffer
+	if err := html.Render(&sanitizedInput, document); err != nil {
+		return Result{}, fmt.Errorf("render sanitized HTML: %w", err)
+	}
 
 	// FromReader is intentionally used instead of FromURL: this package has no
 	// HTTP client and cannot bypass the caller's network policy.
-	article, err := readability.FromReader(bytes.NewReader(body), pageURL)
+	article, err := readability.FromReader(bytes.NewReader(sanitizedInput.Bytes()), pageURL)
 	if err != nil {
 		return Result{}, fmt.Errorf("extract readable article: %w", err)
 	}

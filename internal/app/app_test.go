@@ -43,3 +43,44 @@ func TestAuthorizationRequiresAdminWithoutAllowlist(t *testing.T) {
 		t.Fatal("administrator/DM authorization is incorrect")
 	}
 }
+
+func TestShutdownWaitsForTrackedWorkAndRejectsNewWork(t *testing.T) {
+	a := &App{}
+	if !a.beginWork() {
+		t.Fatal("beginWork() rejected work before shutdown")
+	}
+	closed := make(chan error, 1)
+	go func() { closed <- a.Close() }()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		a.lifecycleMu.Lock()
+		closing := a.closing
+		a.lifecycleMu.Unlock()
+		if closing {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("shutdown did not enter closing state")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if a.beginWork() {
+		a.wg.Done()
+		t.Fatal("beginWork() accepted work during shutdown")
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("Close() returned before tracked work completed: %v", err)
+	default:
+	}
+	a.wg.Done()
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close() did not return after tracked work completed")
+	}
+}

@@ -456,9 +456,6 @@ func (s *Service) publish(ctx context.Context, run storage.Run, result Result) (
 		if err != nil {
 			return posted, err
 		}
-		if err := s.Store.MarkBatchSending(ctx, reserved.ID); err != nil {
-			return posted, err
-		}
 		messageID, err := s.Publisher.Publish(ctx, run.ChannelID, nonce, batchEmbeds)
 		if err != nil {
 			state := "failed"
@@ -496,6 +493,10 @@ func (s *Service) safeOutputURL(ctx context.Context, raw string, httpsOnly bool)
 	if err != nil || u.User != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") || httpsOnly && u.Scheme != "https" {
 		return ""
 	}
+	hostname := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+	if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+		return ""
+	}
 	if ip := net.ParseIP(u.Hostname()); ip != nil && !security.IsPublicIP(ip) {
 		return ""
 	}
@@ -509,6 +510,11 @@ func (s *Service) filterSafeArticles(ctx context.Context, articles []article.Art
 		u, err := url.Parse(strings.TrimSpace(candidate.URL))
 		if err != nil || u.User != nil || u.Hostname() == "" || (u.Scheme != "http" && u.Scheme != "https") {
 			s.Logger.Warn("article rejected because URL syntax is unsafe", "source", candidate.Source.Name)
+			continue
+		}
+		hostname := strings.ToLower(strings.TrimSuffix(u.Hostname(), "."))
+		if hostname == "localhost" || strings.HasSuffix(hostname, ".localhost") {
+			s.Logger.Warn("article rejected because URL host is localhost", "source", candidate.Source.Name)
 			continue
 		}
 		if ip := net.ParseIP(u.Hostname()); ip != nil && !security.IsPublicIP(ip) {

@@ -27,6 +27,7 @@ const (
 	defaultFeedMaxBytes    int64 = 2 << 20
 	defaultArticleMaxBytes int64 = 2 << 20
 	defaultRobotsMaxBytes  int64 = 512 << 10
+	maxHostGates                 = 1024
 )
 
 var (
@@ -153,6 +154,12 @@ func New(config Config, policy *security.Policy) (*Client, error) {
 				return fmt.Errorf("validate redirect target: %w", err)
 			}
 			if resourceFromContext(req.Context()) == resourceArticle {
+				// Article redirects stay within the origin whose robots policy was
+				// checked before fetching. Following a cross-origin redirect based on
+				// incidental cache state would make behavior concurrency-dependent.
+				if len(via) == 0 || !sameOrigin(via[0].URL, req.URL) {
+					return &RobotsError{Decision: RobotsDecision{Status: RobotsUnavailable, Reason: "cross-origin article redirects are not followed"}}
+				}
 				decision, cached := c.checkRobotsCached(req.URL)
 				if !cached {
 					return &RobotsError{Decision: RobotsDecision{Status: RobotsUnavailable, Reason: "redirect target robots.txt is not cached"}}
@@ -168,6 +175,28 @@ func New(config Config, policy *security.Policy) (*Client, error) {
 		},
 	}
 	return c, nil
+}
+
+func sameOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil || !strings.EqualFold(a.Scheme, b.Scheme) {
+		return false
+	}
+	aHost := strings.TrimSuffix(strings.ToLower(a.Hostname()), ".")
+	bHost := strings.TrimSuffix(strings.ToLower(b.Hostname()), ".")
+	return aHost != "" && aHost == bHost && effectivePort(a) == effectivePort(b)
+}
+
+func effectivePort(u *url.URL) string {
+	if port := u.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(u.Scheme, "https") {
+		return "443"
+	}
+	if strings.EqualFold(u.Scheme, "http") {
+		return "80"
+	}
+	return ""
 }
 
 // CloseIdleConnections closes cached connections owned by the client.
@@ -501,8 +530,12 @@ func (t *rateTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	releaseHost := true
+	hostAttempted := false
 	defer func() {
 		if releaseHost {
+			if hostAttempted {
+				gate.advance(t.baseDelay)
+			}
 			<-gate.sem
 		}
 	}()
@@ -522,12 +555,17 @@ func (t *rateTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	if err := gate.wait(req.Context(), t.baseDelay); err != nil {
 		return nil, err
 	}
+	hostAttempted = true
 
 	resp, err := t.base.RoundTrip(req)
 	if err != nil {
 		return nil, err
 	}
 	release := func() {
+		// Waiting from response-body release is deliberately conservative. It
+		// guarantees the origin observes at least the configured interval even
+		// when the first request paid connection setup and the next reuses it.
+		gate.advance(t.baseDelay)
 		<-t.global
 		<-gate.sem
 	}
@@ -543,6 +581,14 @@ func (t *rateTransport) gate(host string) *hostGate {
 	defer t.mu.Unlock()
 	if gate := t.hostGates[host]; gate != nil {
 		return gate
+	}
+	// Keep state bounded for feeds that rotate through arbitrary hosts. Once
+	// the cap is reached, new hosts share a conservative overflow gate.
+	if len(t.hostGates) >= maxHostGates {
+		host = "__overflow__"
+		if gate := t.hostGates[host]; gate != nil {
+			return gate
+		}
 	}
 	gate := &hostGate{sem: make(chan struct{}, t.perHost), delay: t.baseDelay}
 	t.hostGates[host] = gate
@@ -584,6 +630,18 @@ func (g *hostGate) wait(ctx context.Context, base time.Duration) error {
 	g.next = time.Now().Add(delay)
 	g.mu.Unlock()
 	return nil
+}
+
+func (g *hostGate) advance(base time.Duration) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	delay := g.delay
+	if delay < base {
+		delay = base
+	}
+	if next := time.Now().Add(delay); next.After(g.next) {
+		g.next = next
+	}
 }
 
 func acquire(ctx context.Context, sem chan struct{}) error {

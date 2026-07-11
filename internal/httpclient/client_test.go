@@ -314,8 +314,8 @@ func TestPerHostConcurrencyAndDelay(t *testing.T) {
 	sort.Slice(starts, func(i, j int) bool { return starts[i].Before(starts[j]) })
 	gap := starts[1].Sub(starts[0])
 	mu.Unlock()
-	if gap < 15*time.Millisecond {
-		t.Fatalf("start gap = %s, want at least 15ms", gap)
+	if gap < 20*time.Millisecond {
+		t.Fatalf("start gap = %s, want at least 20ms", gap)
 	}
 }
 
@@ -361,6 +361,29 @@ func TestHostStartDelaySurvivesGlobalContention(t *testing.T) {
 	defer mu.Unlock()
 	if len(starts) != 2 || starts[1].Sub(starts[0]) < 40*time.Millisecond {
 		t.Fatalf("same-host starts = %v; configured delay was not preserved", starts)
+	}
+}
+
+func TestPerHostAndRobotsStateAreBounded(t *testing.T) {
+	transport := newRateTransport(roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("unused")
+	}), 1, 1, time.Millisecond)
+	for i := 0; i < maxHostGates+200; i++ {
+		transport.gate(fmt.Sprintf("host-%d.example", i))
+	}
+	if got := len(transport.hostGates); got > maxHostGates+1 {
+		t.Fatalf("host gate state grew to %d", got)
+	}
+	c := &Client{robotsCache: make(map[string]robotsCacheEntry)}
+	now := time.Now()
+	for i := 0; i < maxRobotsOrigins+100; i++ {
+		c.robotsCache[fmt.Sprintf("https://host-%d.example", i)] = robotsCacheEntry{expires: now.Add(-time.Minute)}
+	}
+	c.robotsMu.Lock()
+	c.pruneRobotsCacheLocked(now)
+	c.robotsMu.Unlock()
+	if got := len(c.robotsCache); got != 0 {
+		t.Fatalf("expired robots cache retained %d entries", got)
 	}
 }
 
@@ -532,5 +555,35 @@ func TestArticleRedirectRechecksCachedRobotsRules(t *testing.T) {
 	}
 	if blockedRequests.Load() != 0 {
 		t.Fatal("robots-disallowed redirect target was fetched")
+	}
+}
+
+func TestArticleCrossOriginRedirectIsRejectedEvenWhenRobotsAreCached(t *testing.T) {
+	t.Parallel()
+	var targetURL string
+	var targetRequests atomic.Int32
+	client, baseURL := newLocalClient(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/robots.txt":
+			w.Header().Set("Content-Type", "text/plain")
+			fmt.Fprint(w, "User-agent: *\nAllow: /\n")
+		case "/start":
+			http.Redirect(w, r, targetURL, http.StatusFound)
+		case "/target":
+			targetRequests.Add(1)
+			w.Header().Set("Content-Type", "text/html")
+			fmt.Fprint(w, "<html><body>must not be fetched</body></html>")
+		}
+	}), func(config *Config) { config.MinHostDelay = time.Millisecond })
+	targetURL = strings.Replace(baseURL, "safe.test", "other.safe.test", 1) + "/target"
+	if decision := client.CheckRobots(context.Background(), targetURL); !decision.Allowed {
+		t.Fatalf("target robots preload failed: %#v", decision)
+	}
+	_, err := client.FetchArticle(context.Background(), baseURL+"/start")
+	if !errors.Is(err, ErrRobotsDenied) {
+		t.Fatalf("cross-origin redirect error = %v, want ErrRobotsDenied", err)
+	}
+	if targetRequests.Load() != 0 {
+		t.Fatal("cross-origin article redirect target was fetched")
 	}
 }

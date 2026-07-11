@@ -273,7 +273,7 @@ func (s *Store) SentArticleURLs(ctx context.Context, channelID, localDate string
 func (s *Store) SentArticleIdentities(ctx context.Context, channelID, localDate string, allHistory bool) (SentIdentities, error) {
 	query := `SELECT d.normalized_url,d.normalized_title,d.source,COALESCE(d.article_guid,'')
 		FROM deliveries d
-		WHERE d.channel_id=? AND d.state IN ('sent','sending','unknown')`
+		WHERE d.channel_id=? AND d.state IN ('sent','reserved','sending','unknown')`
 	args := []any{channelID}
 	if !allHistory {
 		query += " AND d.local_date=?"
@@ -332,7 +332,7 @@ func (s *Store) ReserveBatch(ctx context.Context, run Run, index int, nonce stri
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `INSERT INTO delivery_batches
-        (run_id,channel_id,local_date,batch_index,nonce,state,created_at) VALUES(?,?,?,?,?,'reserved',?)`,
+		(run_id,channel_id,local_date,batch_index,nonce,state,created_at) VALUES(?,?,?,?,?,'sending',?)`,
 		run.ID, run.ChannelID, run.LocalDate, index, nonce, nowString())
 	if err != nil {
 		return Batch{}, fmt.Errorf("reserve batch: %w", err)
@@ -345,12 +345,12 @@ func (s *Store) ReserveBatch(ctx context.Context, run Run, index int, nonce stri
 		var deliveryResult sql.Result
 		deliveryResult, err = tx.ExecContext(ctx, `INSERT INTO deliveries
 			(article_id,article_guid,normalized_url,normalized_title,source,batch_id,run_id,channel_id,local_date,run_type,state)
-			SELECT id,guid,normalized_url,normalized_title,source,?,?,?,?,?,'reserved' FROM articles WHERE id=?
+			SELECT id,guid,normalized_url,normalized_title,source,?,?,?,?,?,'sending' FROM articles WHERE id=?
 			ON CONFLICT(article_id,channel_id,local_date) DO UPDATE SET
 				article_guid=excluded.article_guid,normalized_url=excluded.normalized_url,
 				normalized_title=excluded.normalized_title,source=excluded.source,
 				batch_id=excluded.batch_id,run_id=excluded.run_id,run_type=excluded.run_type,
-				state='reserved',sent_at=NULL
+				state='sending',sent_at=NULL
 			WHERE deliveries.state='failed'`,
 			id, run.ID, run.ChannelID, run.LocalDate, run.Type, articleID)
 		if err != nil {
@@ -367,22 +367,7 @@ func (s *Store) ReserveBatch(ctx context.Context, run Run, index int, nonce stri
 	if err := tx.Commit(); err != nil {
 		return Batch{}, err
 	}
-	return Batch{ID: id, RunID: run.ID, ChannelID: run.ChannelID, LocalDate: run.LocalDate, Index: index, Nonce: nonce, State: "reserved"}, nil
-}
-
-func (s *Store) MarkBatchSending(ctx context.Context, id int64) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err = tx.ExecContext(ctx, "UPDATE delivery_batches SET state='sending' WHERE id=? AND state='reserved'", id); err != nil {
-		return err
-	}
-	if _, err = tx.ExecContext(ctx, "UPDATE deliveries SET state='sending' WHERE batch_id=? AND state='reserved'", id); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return Batch{ID: id, RunID: run.ID, ChannelID: run.ChannelID, LocalDate: run.LocalDate, Index: index, Nonce: nonce, State: "sending"}, nil
 }
 
 func (s *Store) MarkBatchSent(ctx context.Context, id int64, messageID string) error {
@@ -429,9 +414,9 @@ func (s *Store) GetStatus(ctx context.Context) (Status, error) {
         COALESCE((SELECT fetched_count FROM runs ORDER BY started_at DESC LIMIT 1),0),
         COALESCE((SELECT selected_count FROM runs ORDER BY started_at DESC LIMIT 1),0),
 		COALESCE((SELECT posted_count FROM runs ORDER BY started_at DESC LIMIT 1),0),
-		COALESCE((SELECT COUNT(*) FROM delivery_batches WHERE state IN ('unknown','sending')),0),
+		COALESCE((SELECT COUNT(*) FROM delivery_batches WHERE state IN ('unknown','reserved','sending')),0),
 		COALESCE((SELECT COALESCE(NULLIF(last_error,''),'送信処理中または中断') FROM delivery_batches
-			WHERE state IN ('unknown','sending') ORDER BY created_at DESC,id DESC LIMIT 1),'')`).Scan(
+			WHERE state IN ('unknown','reserved','sending') ORDER BY created_at DESC,id DESC LIMIT 1),'')`).Scan(
 		&last, &success, &status.LastError, &status.FetchedCount, &status.SelectedCount, &status.PostedCount,
 		&status.UnknownBatchCount, &status.LastUnknownError)
 	if err != nil {

@@ -253,6 +253,7 @@ ITmediaは技術的に取得可能でも、[ITmedia RSSフィード利用条件]
 
 - connect timeout 5秒、response header timeout 10秒、request全体20秒
 - redirect最大5回。各redirect先を再検証
+- 記事HTMLはrobots判定の一貫性を保つためoriginをまたぐredirectを追跡せず、feed本文へfallback
 - 同時実行は全体4、hostごと1、同一hostへの開始間隔は最低1秒
 - feed 2 MiB、記事は`MAX_ARTICLE_BYTES`、robots.txt 512 KiB。圧縮展開後に超過を検出
 - RSS／Atom／RDFのXML rootとMIME、記事HTML／XHTMLのMIMEを検証
@@ -344,7 +345,7 @@ URLはscheme／host小文字化、default port・fragment・末尾slashの除去
 
 ### 起動scriptとログ
 
-同梱の`scripts/run-bot.ps1`はrepository rootをworking directoryに設定し、`bin/discord-news-bot.exe`を起動します。秘密値は読まず、設定せず、呼出processの環境だけを継承します。標準出力と標準errorは`logs/bot-YYYY-MM-DD.log`へ追記します。
+同梱の`scripts/run-bot.ps1`はrepository rootをworking directoryに設定し、`bin/discord-news-bot.exe`を起動します。秘密値は読まず、設定せず、呼出processの環境だけを継承します。標準出力と標準errorは`logs/bot-YYYY-MM-DD.log`へ追記します。日付はprocessの起動日であり、午前0時に自動rotationはしません。日付をまたいで常駐した場合も、次回再起動までは同じファイルへ記録されます。
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\run-bot.ps1

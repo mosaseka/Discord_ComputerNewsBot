@@ -44,9 +44,6 @@ func TestMigrationDeliveryAndDailyDeduplication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReserveBatch() error = %v", err)
 	}
-	if err := store.MarkBatchSending(ctx, batch.ID); err != nil {
-		t.Fatal(err)
-	}
 	if err := store.MarkBatchSent(ctx, batch.ID, "message"); err != nil {
 		t.Fatal(err)
 	}
@@ -136,9 +133,6 @@ func TestUnknownDeliveryIsNotAutomaticallyResent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.MarkBatchSending(ctx, batch.ID); err != nil {
-		t.Fatal(err)
-	}
 	if err := store.MarkBatchFailed(ctx, batch.ID, "unknown", context.DeadlineExceeded); err != nil {
 		t.Fatal(err)
 	}
@@ -149,6 +143,57 @@ func TestUnknownDeliveryIsNotAutomaticallyResent(t *testing.T) {
 	sent, err := store.SentArticleURLs(ctx, "c", "2026-07-11", false)
 	if err != nil || len(sent) != 1 {
 		t.Fatalf("ambiguous delivery should be suppressed, got %#v, %v", sent, err)
+	}
+}
+
+func TestReservationIsAtomicSendingAndSurvivesCrashWindow(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(ctx, filepath.Join(t.TempDir(), "bot.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	now := time.Now().UTC()
+	a := article.Article{Title: "Release", URL: "https://example.com/release", PublishedAt: &now, Source: article.Source{Name: "x", Weight: 1}}
+	id, err := store.UpsertArticle(ctx, a, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := store.BeginRun(ctx, "manual", "c", "2026-07-11")
+	batch, err := store.ReserveBatch(ctx, first, 0, "atomic-sending", []int64{id})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if batch.State != "sending" {
+		t.Fatalf("ReserveBatch() state = %q, want sending", batch.State)
+	}
+
+	// Simulate process loss immediately after the reservation transaction. The
+	// next process must treat the outcome as ambiguous rather than retrying.
+	identities, err := store.SentArticleIdentities(ctx, "c", "2026-07-11", false)
+	if err != nil || !identities.Contains(a) {
+		t.Fatalf("reserved delivery was not suppressed: %#v, %v", identities, err)
+	}
+	status, err := store.GetStatus(ctx)
+	if err != nil || status.UnknownBatchCount != 1 || status.LastUnknownError == "" {
+		t.Fatalf("reserved delivery was not visible in status: %#v, %v", status, err)
+	}
+	second, _ := store.BeginRun(ctx, "manual", "c", "2026-07-11")
+	if _, err := store.ReserveBatch(ctx, second, 0, "must-not-resend", []int64{id}); !errors.Is(err, ErrDeliveryConflict) {
+		t.Fatalf("ambiguous delivery was reservable again: %v", err)
+	}
+
+	// Older databases may contain the former transient state. It is also
+	// treated conservatively so an upgrade cannot create duplicate posts.
+	if _, err := store.db.ExecContext(ctx, "UPDATE delivery_batches SET state='reserved' WHERE id=?", batch.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.ExecContext(ctx, "UPDATE deliveries SET state='reserved' WHERE batch_id=?", batch.ID); err != nil {
+		t.Fatal(err)
+	}
+	identities, err = store.SentArticleIdentities(ctx, "c", "2026-07-11", false)
+	if err != nil || !identities.Contains(a) {
+		t.Fatalf("legacy reserved delivery was not suppressed: %#v, %v", identities, err)
 	}
 }
 

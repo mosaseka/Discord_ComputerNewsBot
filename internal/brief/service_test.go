@@ -88,6 +88,26 @@ func TestPublishUsesFakeAndStopsAfterAmbiguousPartialFailure(t *testing.T) {
 	}
 }
 
+func TestFixtureSafetyRejectsLocalhostWithoutDNS(t *testing.T) {
+	service := &Service{Logger: slog.New(slog.NewTextHandler(testWriter{t}, nil))}
+	for _, rawURL := range []string{
+		"http://localhost/article",
+		"https://news.localhost/article",
+		"http://127.0.0.1/article",
+		"http://[::1]/article",
+	} {
+		t.Run(rawURL, func(t *testing.T) {
+			input := []article.Article{{Title: "unsafe", URL: rawURL, Source: article.Source{Name: "fixture"}}}
+			if got := service.filterSafeArticles(context.Background(), input); len(got) != 0 {
+				t.Fatalf("filterSafeArticles() retained unsafe fixture URL %q", rawURL)
+			}
+			if got := service.safeOutputURL(context.Background(), rawURL, false); got != "" {
+				t.Fatalf("safeOutputURL() = %q, want empty", got)
+			}
+		})
+	}
+}
+
 type fakePublisher struct {
 	calls  int
 	failAt int

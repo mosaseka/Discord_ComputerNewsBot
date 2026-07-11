@@ -115,6 +115,10 @@ func (a *App) RunNormal(ctx context.Context) error {
 	a.logger.Info("Discord gateway connected", "guild_command", a.config.DiscordGuildID != "")
 
 	job, err := scheduler.New(ctx, a.config.BriefCron, a.config.Location, func(parent context.Context) {
+		if !a.beginWork() {
+			return
+		}
+		defer a.wg.Done()
 		runCtx, cancel := context.WithTimeout(parent, runTimeout)
 		defer cancel()
 		err := a.coordinator.TryRun(runCtx, func(active context.Context) error {
@@ -147,16 +151,19 @@ func (a *App) Close() error { return a.shutdown() }
 func (a *App) shutdown() error {
 	a.closeOnce.Do(func() {
 		var joined error
-		if a.scheduler != nil {
-			joined = errors.Join(joined, a.scheduler.Shutdown())
-		}
 		a.lifecycleMu.Lock()
 		a.closing = true
 		a.lifecycleMu.Unlock()
+		if a.scheduler != nil {
+			joined = errors.Join(joined, a.scheduler.Shutdown())
+		}
+		// The root context is already canceled when normal shutdown begins. Wait
+		// for any in-flight briefing/interaction cleanup before disconnecting the
+		// Discord session, then close persistence last.
+		a.wg.Wait()
 		if a.discord != nil && a.discord.Session != nil {
 			joined = errors.Join(joined, a.discord.Session.Close())
 		}
-		a.wg.Wait()
 		if a.http != nil {
 			a.http.CloseIdleConnections()
 		}
@@ -190,7 +197,7 @@ func (a *App) reconcileBriefCommand(ctx context.Context) error {
 }
 
 func (a *App) handleInteraction(session *discordgo.Session, event *discordgo.InteractionCreate) {
-	if !a.beginInteraction() {
+	if !a.beginWork() {
 		return
 	}
 	defer a.wg.Done()
@@ -232,7 +239,7 @@ func (a *App) handleInteraction(session *discordgo.Session, event *discordgo.Int
 	}
 }
 
-func (a *App) beginInteraction() bool {
+func (a *App) beginWork() bool {
 	a.lifecycleMu.Lock()
 	defer a.lifecycleMu.Unlock()
 	if a.closing {

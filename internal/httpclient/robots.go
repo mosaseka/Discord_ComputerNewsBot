@@ -17,6 +17,8 @@ import (
 
 var ErrRobotsDenied = errors.New("article fetch denied by robots policy")
 
+const maxRobotsOrigins = 512
+
 // RobotsStatus explains why an article page may or may not be fetched.
 type RobotsStatus string
 
@@ -157,6 +159,7 @@ func (c *Client) checkRobotsCached(u *url.URL) (RobotsDecision, bool) {
 // be fetched at most once per origin and cache interval.
 func (c *Client) robotsRecord(ctx context.Context, origin string) robotsRecord {
 	c.robotsMu.Lock()
+	c.pruneRobotsCacheLocked(time.Now())
 	if entry, ok := c.robotsCache[origin]; ok && time.Now().Before(entry.expires) {
 		c.robotsMu.Unlock()
 		return entry.record
@@ -179,11 +182,30 @@ func (c *Client) robotsRecord(ctx context.Context, origin string) robotsRecord {
 	record := c.loadRobots(ctx, origin)
 	c.robotsMu.Lock()
 	load.record = record
+	c.pruneRobotsCacheLocked(time.Now())
+	if len(c.robotsCache) >= maxRobotsOrigins {
+		var oldestKey string
+		var oldestExpiry time.Time
+		for key, entry := range c.robotsCache {
+			if oldestKey == "" || entry.expires.Before(oldestExpiry) {
+				oldestKey, oldestExpiry = key, entry.expires
+			}
+		}
+		delete(c.robotsCache, oldestKey)
+	}
 	c.robotsCache[origin] = robotsCacheEntry{expires: time.Now().Add(c.config.RobotsCacheTTL), record: record}
 	delete(c.robotsLoads, origin)
 	close(load.done)
 	c.robotsMu.Unlock()
 	return record
+}
+
+func (c *Client) pruneRobotsCacheLocked(now time.Time) {
+	for origin, entry := range c.robotsCache {
+		if !now.Before(entry.expires) {
+			delete(c.robotsCache, origin)
+		}
+	}
 }
 
 func (c *Client) cachedRobots(origin string) (robotsRecord, bool) {
