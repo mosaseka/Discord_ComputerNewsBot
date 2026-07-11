@@ -1,0 +1,85 @@
+feeds:
+  - name: Publickey
+    url: https://www.publickey1.jp/atom.xml
+    enabled: true
+    weight: 1.1
+    language: ja
+    category: general
+    is_official: false
+  - name: gihyo.jp
+    url: https://gihyo.jp/feed/rss2
+    enabled: true
+    weight: 1.0
+    language: ja
+    category: general
+    is_official: false
+  - name: CodeZine
+    url: https://codezine.jp/rss/new/20/index.xml
+    enabled: true
+    weight: 1.0
+    language: ja
+    category: general
+    is_official: false
+  - name: GitHub Blog 日本語
+    url: https://github.blog/jp/feed/
+    enabled: true
+    weight: 1.2
+    language: ja
+    category: platform
+    is_official: true
+  - name: AtCoderInfo
+    url: https://info.atcoder.jp/feed
+    enabled: true
+    weight: 1.1
+    language: ja
+    category: competitive_programming
+    is_official: true
+  - name: IPA 重要なセキュリティ情報
+    url: https://www.ipa.go.jp/security/alert-rss.rdf
+    enabled: true
+    weight: 1.3
+    language: ja
+    category: security
+    is_official: true
+  - name: JVN
+    url: https://jvn.jp/rss/jvn.rdf
+    enabled: true
+    weight: 1.2
+    language: ja
+    category: security
+    is_official: true
+  - name: JPCERT/CC
+    url: https://www.jpcert.or.jp/rss/jpcert.rdf
+    enabled: true
+    weight: 1.3
+    language: ja
+    category: security
+    is_official: true
+  - name: Hatena Developer Blog
+    url: https://developer.hatenastaff.com/feed
+    enabled: true
+    weight: 1.0
+    language: ja
+    category: engineering
+    is_official: true
+  - name: LINEヤフー Tech Blog
+    url: https://techblog.lycorp.co.jp/ja/feed/index.xml
+    enabled: true
+    weight: 1.0
+    language: ja
+    category: engineering
+    is_official: true
+  - name: CyberAgent Developers Blog
+    url: https://developers.cyberagent.co.jp/blog/feed/
+    enabled: true
+    weight: 1.0
+    language: ja
+    category: engineering
+    is_official: true
+  - name: DeNA Engineering
+    url: https://engineering.dena.com/index.xml
+    enabled: true
+    weight: 1.0
+    language: ja
+    category: engineering
+    is_official: true

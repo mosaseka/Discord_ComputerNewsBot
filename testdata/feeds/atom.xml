@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+  <title>Fixture Official Blog</title>
+  <id>https://official.fixture.example/</id>
+  <updated>2026-07-11T06:00:00+09:00</updated>
+  <entry>
+    <id>github-security-update</id>
+    <title>GitHubのセキュリティアドバイザリ機能を更新</title>
+    <link href="https://official.fixture.example/github-security"/>
+    <published>2026-07-11T06:00:00+09:00</published>
+    <updated>2026-07-11T06:00:00+09:00</updated>
+    <content type="html"><![CDATA[GitHubはOSSリポジトリ向けセキュリティアドバイザリ機能の更新を公開しました。開発者は公式ドキュメントと既存設定への影響を確認してください。]]></content>
+  </entry>
+  <entry>
+    <id>python-runtime</id>
+    <title>Pythonランタイムの性能改善と互換性</title>
+    <link href="https://official.fixture.example/python-runtime"/>
+    <published>2026-07-09T16:00:00+09:00</published>
+    <updated>2026-07-09T16:30:00+09:00</updated>
+    <summary>Pythonランタイムの実装変更により性能が改善されました。アップグレード前に互換性と依存関係の確認が必要です。</summary>
+  </entry>
+  <entry>
+    <id>duplicate-go</id>
+    <title>Go 1.26正式版、コンパイラと標準APIを更新</title>
+    <link href="https://fixture.example/go-126/"/>
+    <published>2026-07-10T21:05:00+09:00</published>
+    <summary>Go 1.26の正式版とAPI変更についてのお知らせです。</summary>
+  </entry>
+</feed>

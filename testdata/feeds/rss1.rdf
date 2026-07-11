@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+         xmlns="http://purl.org/rss/1.0/"
+         xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel rdf:about="https://security.fixture.example/">
+    <title>Fixture Security</title>
+    <link>https://security.fixture.example/</link>
+    <description>Security fixture</description>
+    <items><rdf:Seq><rdf:li rdf:resource="https://security.fixture.example/cve-2026-1000"/></rdf:Seq></items>
+  </channel>
+  <item rdf:about="https://security.fixture.example/cve-2026-1000">
+    <title>CVE-2026-1000 Linuxの脆弱性に関する注意喚起</title>
+    <link>https://security.fixture.example/cve-2026-1000</link>
+    <dc:date>2026-07-10T23:30:00+09:00</dc:date>
+    <description>Linuxのネットワーク処理に関する脆弱性が公開されました。利用者はセキュリティアドバイザリを確認し、必要な更新を適用してください。</description>
+  </item>
+</rdf:RDF>

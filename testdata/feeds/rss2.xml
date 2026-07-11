@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0">
+  <channel>
+    <title>Fixture Tech News</title>
+    <link>https://fixture.example/</link>
+    <description>Offline fixture</description>
+    <item>
+      <guid>go-126-release</guid>
+      <title>Go 1.26 正式版がリリース、コンパイラと標準APIを更新</title>
+      <link>https://fixture.example/go-126?utm_source=test&amp;ref=feed</link>
+      <pubDate>Fri, 10 Jul 2026 21:00:00 +0900</pubDate>
+      <description><![CDATA[Go 1.26の正式版が公開され、コンパイラと標準APIに複数の変更が加えられました。開発者はリリースノートで互換性と移行手順を確認する必要があります。]]></description>
+    </item>
+    <item>
+      <guid>typescript-api</guid>
+      <title>TypeScript向けバックエンドAPI設計の改善</title>
+      <link>https://fixture.example/typescript-api</link>
+      <pubDate>Fri, 10 Jul 2026 10:00:00 +0900</pubDate>
+      <description><![CDATA[TypeScriptで実装したバックエンドAPIのアーキテクチャを改善した事例です。依存関係と性能を測定し、移行時の注意点を説明しています。]]></description>
+    </item>
+    <item>
+      <guid>sqlite-weekly</guid>
+      <title>SQLiteトランザクションとデータベース運用の基礎</title>
+      <link>https://fixture.example/sqlite</link>
+      <pubDate>Mon, 06 Jul 2026 12:00:00 +0900</pubDate>
+      <description><![CDATA[SQLiteのtransactionとbusy timeoutの仕組みを解説します。バックエンド開発者が同時アクセスへ対応する際の注意点を示します。]]></description>
+    </item>
+  </channel>
+</rss>

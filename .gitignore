@@ -26,7 +26,29 @@ go.work.sum
 
 # env file
 .env
+.env.*
+!.env.example
+
+# Local runtime data
+data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+logs/
+*.log
+
+# Local build and tool caches
+bin/
+.cache/
+
+# Secrets and local overrides
+config/feeds.local.yaml
+*.secret
 
 # Editor/IDE
-# .idea/
-# .vscode/
+.idea/
+.vscode/
+.DS_Store

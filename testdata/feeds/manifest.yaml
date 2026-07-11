@@ -1,0 +1,23 @@
+now: 2026-07-11T08:00:00+09:00
+feeds:
+  - file: rss2.xml
+    name: Fixture Tech News
+    url: https://fixture.example/rss2.xml
+    weight: 1.0
+    language: ja
+    category: general
+    is_official: false
+  - file: atom.xml
+    name: Fixture Official Blog
+    url: https://official.fixture.example/atom.xml
+    weight: 1.2
+    language: ja
+    category: platform
+    is_official: true
+  - file: rss1.rdf
+    name: Fixture Security
+    url: https://security.fixture.example/rss.rdf
+    weight: 1.3
+    language: ja
+    category: security
+    is_official: true

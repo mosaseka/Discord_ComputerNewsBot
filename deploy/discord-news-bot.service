@@ -1,0 +1,26 @@
+[Unit]
+Description=Japanese programming news Discord bot
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=discord-news-bot
+Group=discord-news-bot
+WorkingDirectory=/opt/discord-news-bot
+EnvironmentFile=/etc/discord-news-bot.env
+ExecStart=/opt/discord-news-bot/bin/discord-news-bot
+Restart=on-failure
+RestartSec=15s
+TimeoutStopSec=330s
+
+StateDirectory=discord-news-bot
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/discord-news-bot
+
+[Install]
+WantedBy=multi-user.target
