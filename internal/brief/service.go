@@ -65,11 +65,16 @@ type Result struct {
 	Outcome       string
 }
 
+type geminiSummarizer interface {
+	Summarize(context.Context, summarizer.GeminiInput) (summarizer.Result, error)
+}
+
 type Service struct {
 	Config    config.Config
 	Feeds     []config.Feed
 	Store     *storage.Store
 	HTTP      *httpclient.Client
+	Gemini    geminiSummarizer
 	Publisher discordout.Publisher
 	Logger    *slog.Logger
 	Now       func() time.Time
@@ -91,7 +96,11 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 	now := s.Now()
 	var fixtureResult fixture.Result
 	var err error
-	if request.FixtureDir != "" {
+	if request.FixtureDir == "" {
+		request.FixtureDir = s.Config.Mode.Fixture
+	}
+	offline := request.FixtureDir != ""
+	if offline {
 		request.Type = RunFixture
 		request.DryRun = true
 		fixtureResult, err = fixture.Load(ctx, request.FixtureDir)
@@ -147,7 +156,7 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 	}
 
 	var articles []article.Article
-	if request.FixtureDir != "" {
+	if offline {
 		articles = fixtureResult.Articles
 		if err := s.recordFixtureFeeds(ctx, run.ID, articles); err != nil {
 			return finishFailure(err)
@@ -166,10 +175,10 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 	sortArticles(articles)
 	articles = article.DeduplicateExact(articles)
 	sortArticles(articles)
-	if request.FixtureDir == "" && s.Config.ArticleFetchEnabled && s.HTTP != nil {
+	if !offline && s.Config.ArticleFetchEnabled && s.HTTP != nil {
 		s.enrichTopCandidates(ctx, articles, now)
 	}
-	articles = s.filterSafeArticles(ctx, articles)
+	articles = s.filterSafeArticles(ctx, articles, offline)
 
 	if request.ChannelID != "" {
 		allHistory := request.Type == RunScheduled
@@ -208,31 +217,27 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 	result.Brief.Items = make([]discordout.Item, 0, len(selection.Articles))
 	for _, selected := range selection.Articles {
 		a := selected.Article
-		displayURL := s.safeOutputURL(ctx, a.URL, false)
+		displayURL := s.safeOutputURL(ctx, a.URL, false, offline)
 		if displayURL == "" {
 			s.Logger.Warn("selected article has no safe public URL", "source", a.Source.Name, "normalized_url", a.NormalizedURL)
 			continue
 		}
-		summaryLinks := make([]summarizer.Link, 0, len(a.Links))
-		for _, link := range a.Links {
-			summaryLinks = append(summaryLinks, summarizer.Link{Text: link.Text, URL: link.URL})
-		}
-		summary := summarizer.Summarize(summarizer.Input{Title: a.Title, Body: a.BestText(), Links: summaryLinks})
+		summary, generated := s.summarize(ctx, a, offline)
 		next := summary.NextCheck
-		if followURL := s.safeOutputURL(ctx, summary.NextCheckURL, false); followURL != "" {
+		if followURL := s.safeOutputURL(ctx, summary.NextCheckURL, false, offline); followURL != "" {
 			next += "\n" + followURL
 		} else {
 			next += "\n" + displayURL
 		}
 		published := publicationDisplay(a, loc)
-		image := s.safeOutputURL(ctx, a.ImageURL, true)
+		image := s.safeOutputURL(ctx, a.ImageURL, true, offline)
 		a.EnsureNormalized()
 		item := Item{Article: a, Score: selected.Breakdown, Summary: summary, ArticleID: articleIDs[a.NormalizedURL]}
 		result.Items = append(result.Items, item)
 		result.Brief.Items = append(result.Brief.Items, discordout.Item{
 			Title: a.Title, URL: displayURL, Source: a.Source.Name, Published: published,
 			Summary: summary.KeyPoints, Background: summary.TechnicalBackground,
-			Impact: summary.DeveloperImpact, Next: next, ImageURL: image,
+			Impact: summary.DeveloperImpact, Next: next, ImageURL: image, Generated: generated,
 		})
 	}
 	result.SelectedCount = len(result.Items)
@@ -270,6 +275,26 @@ func (s *Service) Run(ctx context.Context, request Request) (Result, error) {
 		}
 	}
 	return result, nil
+}
+
+func (s *Service) summarize(ctx context.Context, a article.Article, offline bool) (summarizer.Result, bool) {
+	text := a.BestText()
+	links := make([]summarizer.Link, 0, len(a.Links))
+	for _, link := range a.Links {
+		links = append(links, summarizer.Link{Text: link.Text, URL: link.URL})
+	}
+	if !offline && s.Config.GeminiEnabled && s.Gemini != nil {
+		plainText := text
+		if a.Body == "" {
+			plainText = textutil.StripHTML(text)
+		}
+		summary, err := s.Gemini.Summarize(ctx, summarizer.GeminiInput{Title: a.Title, Text: plainText, FeedOnly: !a.HasFetchedBody})
+		if err == nil {
+			_, summary.NextCheckURL = summarizer.SelectNextCheck(links)
+			return summary, true
+		}
+	}
+	return summarizer.Summarize(summarizer.Input{Title: a.Title, Body: text, Links: links}), false
 }
 
 func (s *Service) collect(ctx context.Context, runID string) ([]article.Article, int, error) {
@@ -402,6 +427,7 @@ func (s *Service) enrichOne(ctx context.Context, candidate article.Article) (art
 	}
 	if parsed.TextContent != "" {
 		candidate.Body = parsed.TextContent
+		candidate.HasFetchedBody = true
 	}
 	if parsed.Description != "" && candidate.Description == "" {
 		candidate.Description = parsed.Description
@@ -418,11 +444,11 @@ func (s *Service) enrichOne(ctx context.Context, candidate article.Article) (art
 	if parsed.SiteName != "" {
 		candidate.SiteName = parsed.SiteName
 	}
-	if canonical := s.safeOutputURL(ctx, parsed.CanonicalURL, false); canonical != "" {
+	if canonical := s.safeOutputURL(ctx, parsed.CanonicalURL, false, false); canonical != "" {
 		candidate.CanonicalURL = canonical
 		candidate.NormalizedURL = ""
 	}
-	if image := s.safeOutputURL(ctx, parsed.ImageURL, true); image != "" {
+	if image := s.safeOutputURL(ctx, parsed.ImageURL, true, false); image != "" {
 		candidate.ImageURL = image
 	}
 	for _, link := range parsed.Links {
@@ -474,7 +500,7 @@ func (s *Service) publish(ctx context.Context, run storage.Run, result Result) (
 	return posted, nil
 }
 
-func (s *Service) safeOutputURL(ctx context.Context, raw string, httpsOnly bool) string {
+func (s *Service) safeOutputURL(ctx context.Context, raw string, httpsOnly, offline bool) string {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
@@ -482,7 +508,7 @@ func (s *Service) safeOutputURL(ctx context.Context, raw string, httpsOnly bool)
 	// Fixture mode must remain completely offline, including metadata URL
 	// validation. Its manifest is trusted test input, so syntax-only validation
 	// is sufficient there.
-	if s.HTTP != nil && s.Config.Mode.Fixture == "" {
+	if s.HTTP != nil && !offline {
 		validated, err := s.HTTP.ValidateURL(ctx, raw)
 		if err != nil || httpsOnly && validated.Scheme != "https" {
 			return ""
@@ -503,7 +529,7 @@ func (s *Service) safeOutputURL(ctx context.Context, raw string, httpsOnly bool)
 	return u.String()
 }
 
-func (s *Service) filterSafeArticles(ctx context.Context, articles []article.Article) []article.Article {
+func (s *Service) filterSafeArticles(ctx context.Context, articles []article.Article, offline bool) []article.Article {
 	result := make([]article.Article, 0, len(articles))
 	originAllowed := make(map[string]bool)
 	for _, candidate := range articles {
@@ -525,7 +551,7 @@ func (s *Service) filterSafeArticles(ctx context.Context, articles []article.Art
 		allowed, checked := originAllowed[origin]
 		if !checked {
 			allowed = true
-			if s.HTTP != nil && s.Config.Mode.Fixture == "" {
+			if s.HTTP != nil && !offline {
 				_, err = s.HTTP.ValidateURL(ctx, candidate.URL)
 				allowed = err == nil
 			}
@@ -619,8 +645,12 @@ func priorityReason(score ranking.ScoreBreakdown) string {
 func FormatText(result Result) string {
 	var out strings.Builder
 	for i, item := range result.Brief.Items {
-		fmt.Fprintf(&out, "%d. %s\n情報源: %s\nURL: %s\n公開日時: %s\n要点: %s\n技術的背景: %s\n開発者・学生への影響: %s\n次に確認すべき点: %s\n",
-			i+1, item.Title, item.Source, item.URL, item.Published, item.Summary, item.Background, item.Impact, item.Next)
+		fmt.Fprintf(&out, "%d. %s\n情報源: %s\nURL: %s\n公開日時: %s\n要約方式: %s\n要点: %s\n",
+			i+1, item.Title, item.Source, item.URL, item.Published, item.SummaryLabel(), item.Summary)
+		if !item.Generated {
+			fmt.Fprintf(&out, "技術的背景: %s\n", item.Background)
+		}
+		fmt.Fprintf(&out, "開発者・学生への影響: %s\n次に確認すべき点: %s\n", item.Impact, item.Next)
 		if item.ImageURL != "" {
 			fmt.Fprintf(&out, "画像URL: %s\n", item.ImageURL)
 		}

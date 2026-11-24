@@ -5,6 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -14,7 +18,10 @@ import (
 	"github.com/mosaseka/Discord_ComputerNewsBot/internal/article"
 	"github.com/mosaseka/Discord_ComputerNewsBot/internal/config"
 	discordout "github.com/mosaseka/Discord_ComputerNewsBot/internal/discord"
+	"github.com/mosaseka/Discord_ComputerNewsBot/internal/httpclient"
+	"github.com/mosaseka/Discord_ComputerNewsBot/internal/security"
 	"github.com/mosaseka/Discord_ComputerNewsBot/internal/storage"
+	"github.com/mosaseka/Discord_ComputerNewsBot/internal/summarizer"
 )
 
 func TestFixtureRunIsOfflineDeterministicAndAtMostFive(t *testing.T) {
@@ -26,9 +33,20 @@ func TestFixtureRunIsOfflineDeterministicAndAtMostFive(t *testing.T) {
 	defer store.Close()
 	loc, _ := time.LoadLocation("Asia/Tokyo")
 	publisher := &fakePublisher{}
+	client, err := httpclient.New(httpclient.DefaultConfig(), security.NewPolicy(briefResolver(func(context.Context, string) ([]net.IPAddr, error) {
+		t.Fatal("fixture performed DNS resolution")
+		return nil, nil
+	}), nil))
+	if err != nil {
+		t.Fatal(err)
+	}
 	service := Service{
-		Config: config.Config{Location: loc}, Store: store,
+		Config: config.Config{Location: loc, GeminiEnabled: true}, Store: store, HTTP: client,
 		Logger: slog.New(slog.NewTextHandler(testWriter{t}, nil)), Publisher: publisher,
+		Gemini: fakeGemini(func(summarizer.GeminiInput) (summarizer.Result, error) {
+			t.Fatal("fixture called Gemini")
+			return summarizer.Result{}, nil
+		}),
 	}
 	dir := filepath.Join("..", "..", "testdata", "feeds")
 	result, err := service.Run(ctx, Request{FixtureDir: dir, DryRun: true})
@@ -38,12 +56,136 @@ func TestFixtureRunIsOfflineDeterministicAndAtMostFive(t *testing.T) {
 	if result.FetchedCount < 6 || result.SelectedCount == 0 || result.SelectedCount > 5 || result.PostedCount != 0 {
 		t.Fatalf("unexpected result: %#v", result)
 	}
-	if result.Brief.PriorityTitle == "" || FormatText(result) == "" {
+	if result.Brief.PriorityTitle == "" || !strings.Contains(FormatText(result), "抽出型要約") {
 		t.Fatal("fixture run did not produce a briefing")
 	}
 	if publisher.calls != 0 {
 		t.Fatal("dry-run called the Discord publisher")
 	}
+}
+
+func TestGeminiSummarizesOnlySelectedArticlesAndFallsBackPerItem(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 24, 8, 0, 0, 0, time.UTC)
+	titles := []string{
+		"Goコンパイラの診断メッセージ更新", "Rust標準ライブラリに新しい型",
+		"Kubernetesの運用ガイド公開", "Linuxファイルシステムの修正",
+		"Pythonランタイムのメモリ改善", "Gitの認証設定を変更", "PostgreSQLのクエリ計画改善",
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/rss+xml")
+		fmt.Fprint(w, `<rss version="2.0"><channel><title>Test</title>`)
+		for i, title := range titles {
+			fmt.Fprintf(w, `<item><title>%s</title><link>https://articles.test/news/%d</link><pubDate>%s</pubDate><description>%s。設定に関わる変更点を利用者向けに解説しています。</description></item>`,
+				title, i, now.Add(-time.Duration(i+1)*time.Hour).Format(time.RFC1123Z), title)
+		}
+		fmt.Fprint(w, "</channel></rss>")
+	}))
+	defer server.Close()
+	local, err := url.Parse(server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver := briefResolver(func(_ context.Context, host string) ([]net.IPAddr, error) {
+		if host != "feed.test" && host != "articles.test" {
+			return nil, errors.New("unexpected host")
+		}
+		return []net.IPAddr{{IP: net.ParseIP("1.1.1.1")}}, nil
+	})
+	client, err := httpclient.New(httpclient.Config{MinHostDelay: time.Millisecond}, security.NewPolicy(resolver, localDialer{address: local.Host}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	store, err := storage.Open(ctx, filepath.Join(t.TempDir(), "bot.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	var calls []string
+	publisher := &fakePublisher{}
+	service := Service{
+		Config: config.Config{GeminiEnabled: true, Location: time.UTC}, Store: store, HTTP: client, Publisher: publisher,
+		Feeds: []config.Feed{{Name: "Test", URL: "http://feed.test/feed", Enabled: true, Weight: 1, Language: "ja"}},
+		Now:   func() time.Time { return now },
+		Gemini: fakeGemini(func(input summarizer.GeminiInput) (summarizer.Result, error) {
+			calls = append(calls, input.Title)
+			if !input.FeedOnly || !strings.Contains(input.Text, "利用者向け") {
+				t.Fatal("expected RSS excerpt in Gemini input")
+			}
+			switch len(calls) {
+			case 2:
+				return summarizer.Result{}, &httpclient.StatusError{StatusCode: http.StatusTooManyRequests}
+			case 4:
+				return summarizer.Result{}, context.DeadlineExceeded
+			default:
+				return summarizer.Result{KeyPoints: "生成の要点", DeveloperImpact: "利用者への影響", NextCheck: "設定を確認"}, nil
+			}
+		}),
+	}
+	run := func(request Request, want int) Result {
+		t.Helper()
+		calls = nil
+		result, err := service.Run(ctx, request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(calls) != want || result.SelectedCount != want || result.FetchedCount != len(titles) {
+			t.Fatalf("Gemini calls = %d, selected = %d, fetched = %d, want %d/%d/%d", len(calls), result.SelectedCount, result.FetchedCount, want, want, len(titles))
+		}
+		embeds := discordout.BuildEmbeds(result.Brief)
+		for i, item := range result.Brief.Items {
+			if calls[i] != item.Title || item.Generated != (i != 1 && i != 3) ||
+				embeds[i].Footer.Text != item.SummaryLabel() || embeds[i].URL != item.URL || !strings.HasSuffix(item.Next, item.URL) ||
+				item.Published == "" {
+				t.Fatalf("unexpected summary integration at index %d", i)
+			}
+			wantKeyPoints := "生成の要点"
+			if !item.Generated {
+				wantKeyPoints = summarizer.Summarize(summarizer.Input{
+					Title: item.Title, Body: result.Items[i].Article.BestText(),
+				}).KeyPoints
+			}
+			if item.Summary != wantKeyPoints {
+				t.Fatalf("unexpected summary at index %d", i)
+			}
+		}
+		return result
+	}
+	dry := run(Request{Type: RunDry, ChannelID: "channel", DryRun: true}, 5)
+	if publisher.calls != 0 || !strings.Contains(FormatText(dry), "Gemini生成要約") || !strings.Contains(FormatText(dry), "抽出型要約") {
+		t.Fatal("dry-run did not display both methods without publishing")
+	}
+	posted := run(Request{Type: RunManual, ChannelID: "channel"}, 5)
+	if posted.PostedCount != 5 || publisher.calls == 0 {
+		t.Fatal("briefing was not posted after per-item fallback")
+	}
+	preview := run(Request{Type: RunPreview, ChannelID: "channel", DryRun: true}, 2)
+	for _, item := range preview.Brief.Items {
+		for _, prior := range posted.Brief.Items {
+			if item.URL == prior.URL {
+				t.Fatal("Gemini was called for a previously posted article")
+			}
+		}
+	}
+}
+
+type fakeGemini func(summarizer.GeminiInput) (summarizer.Result, error)
+
+func (f fakeGemini) Summarize(_ context.Context, input summarizer.GeminiInput) (summarizer.Result, error) {
+	return f(input)
+}
+
+type briefResolver func(context.Context, string) ([]net.IPAddr, error)
+
+func (r briefResolver) LookupIPAddr(ctx context.Context, host string) ([]net.IPAddr, error) {
+	return r(ctx, host)
+}
+
+type localDialer struct{ address string }
+
+func (d localDialer) DialContext(ctx context.Context, network, _ string) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, network, d.address)
 }
 
 func TestPublishUsesFakeAndStopsAfterAmbiguousPartialFailure(t *testing.T) {
@@ -98,10 +240,10 @@ func TestFixtureSafetyRejectsLocalhostWithoutDNS(t *testing.T) {
 	} {
 		t.Run(rawURL, func(t *testing.T) {
 			input := []article.Article{{Title: "unsafe", URL: rawURL, Source: article.Source{Name: "fixture"}}}
-			if got := service.filterSafeArticles(context.Background(), input); len(got) != 0 {
+			if got := service.filterSafeArticles(context.Background(), input, true); len(got) != 0 {
 				t.Fatalf("filterSafeArticles() retained unsafe fixture URL %q", rawURL)
 			}
-			if got := service.safeOutputURL(context.Background(), rawURL, false); got != "" {
+			if got := service.safeOutputURL(context.Background(), rawURL, false, true); got != "" {
 				t.Fatalf("safeOutputURL() = %q, want empty", got)
 			}
 		})

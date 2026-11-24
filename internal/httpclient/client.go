@@ -147,6 +147,9 @@ func New(config Config, policy *security.Policy) (*Client, error) {
 		Transport: rate,
 		Timeout:   config.RequestTimeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if resourceFromContext(req.Context()) == resourceGemini {
+				return http.ErrUseLastResponse
+			}
 			if len(via) > config.MaxRedirects {
 				return fmt.Errorf("stopped after %d redirects", config.MaxRedirects)
 			}
@@ -250,6 +253,7 @@ const (
 	resourceFeed resourceKind = iota
 	resourceArticle
 	resourceRobots
+	resourceGemini
 )
 
 func (c *Client) fetch(ctx context.Context, rawURL string, kind resourceKind) (*Response, error) {

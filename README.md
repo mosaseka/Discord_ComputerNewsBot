@@ -2,13 +2,13 @@
 
 日本語のプログラミング／コンピュータ関連ニュースを公開RSS・Atomフィードから収集し、決定論的に順位付けしてDiscordへ投稿するGo製Botです。記事本文が不足する場合だけ、`robots.txt`を尊重して公開記事ページを補助的に解析します。
 
-このプロジェクトは、LLM、ローカルLLM、有料API、APIキーを必要とするニュースサービスを使用しません。要約は原文から文を選ぶ抽出型であり、生成・翻訳は行いません。通常運用時の外部通信先は、設定したフィード、許可された記事ページとその`robots.txt`、Discord公式APIだけです。
+既定の要約方式は、原文から文を選ぶ抽出型です。外部通信先は、設定したフィード、許可された記事ページとその`robots.txt`、Discord公式APIに限定します。`GEMINI_ENABLED=true`に設定すると、選定済み記事の要約に限り、Gemini Developer APIの公式エンドポイントへの通信も許可します。その他のLLM、生成AI API、有料API、APIキー型ニュースサービスの追加は禁止です。
 
 ## 主な機能
 
 - RSS 2.0、Atom、RSS 1.0/RDFを各フィード最大50件まで解析
 - 48時間から最大7日まで候補期間を広げ、重複を除いて上位5件を選定
-- 固定ルールによる監査可能なスコアリングと抽出的な日本語要約
+- 固定ルールによる監査可能なスコアリング、日本語の抽出型要約、任意のGemini生成要約
 - Discord Embedの全サイズ制限、Unicode境界、メンション無効化に対応
 - `/brief now|preview|status|feeds` Slash Command
 - 5フィールドcron、タイムゾーン対応、同時実行防止、graceful shutdown
@@ -43,7 +43,7 @@ CLI / gocron / Discord Slash Command
 | `internal/httpclient`, `internal/security` | HTTP制限、robots、SSRF／DNS防御 |
 | `internal/feed`, `internal/htmlparser` | feed解析と補助的な本文・metadata抽出 |
 | `internal/article` | URL／title正規化、完全・近似重複排除 |
-| `internal/ranking`, `internal/summarizer` | 決定論的ランキングと抽出的要約 |
+| `internal/ranking`, `internal/summarizer` | 決定論的ランキング、抽出型要約、任意のGemini生成要約 |
 | `internal/discord` | command定義、Embed生成・分割、nonce付き投稿 |
 | `internal/storage` | migration、監査情報、投稿状態、日次実行状態 |
 | `internal/fixture` | 固定時計を含む完全オフラインfixture |
@@ -88,7 +88,7 @@ Discord設定やネットワーク接続なしで、固定された日時とロ�
 .\bin\discord-news-bot.exe --once --dry-run --fixture .\testdata\feeds
 ```
 
-`--fixture`は`--once`必須で、自動的にdry-runになります。外部HTTP、DNS、Discord投稿を行いません。SQLiteにはfixture runと記事metadataが監査用に記録されるため、`DATABASE_PATH`の親ディレクトリには書き込み権限が必要です。
+`--fixture`は`--once`必須で、自動的にdry-runになります。Geminiの設定やキーの有無にかかわらず抽出型要約を使い、外部HTTPとDNSなしで実行します。SQLiteにはfixture runと記事metadataが監査用に記録されるため、`DATABASE_PATH`の親ディレクトリには書き込み権限が必要です。
 
 ### 3. live dry-run
 
@@ -98,7 +98,7 @@ Discord設定やネットワーク接続なしで、固定された日時とロ�
 .\bin\discord-news-bot.exe --once --dry-run
 ```
 
-live dry-runもrun、feed取得結果、記事URL、スコアをSQLiteへ記録します。記事本文そのものとDiscordのdelivery履歴は保存しません。
+live dry-runもrun、feed取得結果、記事URL、スコアをSQLiteへ記録します。Geminiを有効化すると、Discordへ投稿する前に同じ生成処理の結果を標準出力で確認できます。記事本文そのものとDiscordのdelivery履歴は保存しません。
 
 ### 4. Discordへ1回だけ投稿
 
@@ -156,10 +156,12 @@ $env:DISCORD_CHANNEL_ID = "123456789012345678"
 | `BRIEF_CRON` | `0 8 * * *` | 秒を含まない5フィールドcron |
 | `DATABASE_PATH` | `data/bot.db` | SQLiteファイル。親ディレクトリは自動作成 |
 | `LOG_LEVEL` | `info` | `debug`、`info`、`warn`、`error` |
-| `HTTP_USER_AGENT` | repository URLを含むBot既定値 | feed、記事、robots取得時のUser-Agent |
+| `HTTP_USER_AGENT` | repository URLを含むBot既定値 | feed、記事、robots、Geminiへのリクエストで使うUser-Agent |
 | `MAX_ARTICLE_BYTES` | `2097152` | 展開・文字コード変換前に制限する記事responseの最大byte数。正の整数 |
 | `ARTICLE_FETCH_ENABLED` | `true` | 情報不足記事のHTML補完を有効化 |
 | `COMMAND_STATUS_PUBLIC` | `false` | `true`ならguildメンバーが`status`と`feeds`を実行可能 |
+| `GEMINI_ENABLED` | `false` | `true`で選定済み記事のGemini生成要約を有効化 |
+| `GEMINI_API_KEY` | なし | 秘密値。未設定の場合は抽出型要約で継続 |
 
 モードごとのDiscord必須値:
 
@@ -312,9 +314,21 @@ URLはscheme／host小文字化、default port・fragment・末尾slashの除去
 
 これは意味理解やfact checkを行う要約器ではありません。原文の品質、feedのdescription、HTML抽出精度に左右され、文脈を十分に表せない場合があります。重要な判断では必ず元記事と一次資料を確認してください。
 
+## Gemini生成要約
+
+`GEMINI_ENABLED=true`を設定し、実行環境に`GEMINI_API_KEY`を注入します。GitHub Actionsで実行する場合は、Secretの`GEMINI_API_KEY`を実行ステップの同名の環境変数へ割り当てます。キーをソースやコマンド引数に書かないでください。APIの利用枠と課金はGoogle側のプロジェクト設定に従います。[Gemini Developer APIの料金](https://ai.google.dev/gemini-api/docs/pricing)
+
+定期投稿、`--once`、live dry-run、`/brief now`、`/brief preview`では、重複と既存の通知履歴を確認した後に選定した最大5件を処理します。Geminiを使う場合、記事ごとに`gemini-3.5-flash-lite`へ1回リクエストし、推論レベルは`MINIMAL`です。Google Search、URL Context、関数呼び出しなどのツールは指定しません。[モデル仕様](https://aistudio.google.com/docs/models/gemini-3.5-flash-lite) [推論レベル](https://aistudio.google.com/docs/thinking?generate-content=true#thinking-levels)
+
+送信先は`https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent`に固定し、リダイレクトを拒否します。既存のDNS検証とレート制限を適用し、1リクエストは最大20秒、タイトルは512バイト、記事本文またはRSS抜粋は8 KiB、リクエストとレスポンスは各64 KiB、生成出力は512トークンまでです。[REST API](https://aistudio.google.com/api-reference/generate-content/generate-content) [構造化出力](https://aistudio.google.com/docs/structured-output?generate-content=true)
+
+記事のタイトルと取得済みテキストは外部資料として渡し、「何が変わったか」「誰に影響するか」「開発者が確認すべき点」をそれぞれ短い日本語で生成します。RSS抜粋だけの場合は、資料で確認できる内容に基づきます。Embedのリンクと公開日時には既存の記事データを使います。キー、入力本文、APIの生レスポンスはログに出力しません。
+
+キー未設定、HTTP 429、タイムアウト、空や不正な応答の場合は、項目ごとに抽出型要約で続行します。要約方式は各Embedのフッターとdry-runの標準出力に「Gemini生成要約」または「抽出型要約」と表示します。
+
 ## Discord投稿と再投稿規則
 
-各記事を1 Embed、最後に「今日の最優先トピック」を1 Embedとして作ります。Discordの10 embeds／message、合計6000 UTF-16 units、title 256、description 4096、field 25件・各1024などを一箇所で検証し、grapheme境界を壊さず複数messageへ分割します。画像はpublic HTTPS URLだけ、記事linkはpublic HTTP(S)だけを使い、`allowed_mentions`を空にします。
+各記事を1 Embed、最後に「今日の最優先トピック」を1 Embedとして作ります。Discordの10 embeds／message、合計6000 UTF-16 units、title 256、description 4096、field 25件・各1024などを一箇所で検証し、grapheme境界を壊さず複数messageへ分割します。`/brief preview`では必要に応じて要約欄を短縮し、実行者だけに見える1件の応答に収めます。画像はpublic HTTPS URLだけ、記事linkはpublic HTTP(S)だけを使い、`allowed_mentions`を空にします。
 
 各message batchは送信前にSQLiteへ予約し、24文字の決定論的nonceとDiscordの`enforce_nonce`を使用します。送信成功時だけmessage IDとdeliveryを`sent`にします。timeoutや5xxなど送信成否が不明な場合は`unknown`にして自動再送せず、重複投稿を避けます。Channelを目視確認してから手動対応してください。
 
@@ -463,7 +477,7 @@ go build -trimpath -o .\bin\discord-news-bot.exe .\cmd\bot
 git diff --check
 ```
 
-Windowsの`-race`はC compilerがない環境では失敗します。GitHub ActionsのUbuntu jobでrace testを実行します。testは`httptest`とfixtureを使用し、実サイトやDiscordへ接続してはいけません。
+Windowsの`-race`はC compilerがない環境では失敗します。GitHub ActionsのUbuntu jobでrace testを実行します。testは`httptest`、fake、fixtureを使い、実サイト、Discord、Geminiへの通信と外部DNSを行いません。
 
 主要な直接依存:
 
@@ -534,8 +548,8 @@ SSRF境界を一貫させるため環境proxyを無効にしています。`HTTP
 - schedulerはprocessが起動中のときだけ動作し、sleep中のmissed runを補完しません。
 - SQLiteに自動retentionはなく、長期運用では監査DBとlogの容量を監視してください。
 - 複数hostにまたがるdistributed schedulerは想定していません。
-- Discord、feed、記事ページ以外のAPI、LLM、課金serviceへのfallbackはありません。
+- Geminiの生成要約は提供資料の内容に左右されます。正確な変更内容は元記事で確認してください。
 
 ## ライセンスと利用条件
 
-repositoryのlicense、および各依存libraryのlicenseに従ってください。ニュース本文・画像・feedの権利は各提供者に帰属します。本Botは短い抽出文と元記事linkを扱いますが、それだけで任意の利用方法が許諾されるとは限りません。公開・組込み・商用運用前に、運用者自身が各情報源の最新条件を確認してください。
+repositoryのlicense、および各依存libraryのlicenseに従ってください。ニュース本文・画像・feedの権利は各提供者に帰属します。本Botは短い要約と元記事linkを扱いますが、それだけで任意の利用方法が許諾されるとは限りません。公開・組込み・商用運用前に、運用者自身が各情報源の最新条件を確認してください。

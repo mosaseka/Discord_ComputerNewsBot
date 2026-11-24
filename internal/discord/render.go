@@ -36,6 +36,14 @@ type Item struct {
 	Impact     string
 	Next       string
 	ImageURL   string
+	Generated  bool
+}
+
+func (item Item) SummaryLabel() string {
+	if item.Generated {
+		return "Gemini生成要約"
+	}
+	return "抽出型要約"
 }
 
 type Briefing struct {
@@ -52,13 +60,20 @@ func BuildEmbeds(brief Briefing) []*discordgo.MessageEmbed {
 			Title:       Truncate(item.Title, MaxEmbedTitle),
 			URL:         safeHTTPURL(item.URL, false),
 			Description: Truncate(formatSource(item.Source, item.Published), 500),
+			Footer:      &discordgo.MessageEmbedFooter{Text: item.SummaryLabel()},
 			Fields: []*discordgo.MessageEmbedField{
 				{Name: "要点", Value: fallback(Truncate(item.Summary, 700), "記事から要点を抽出できませんでした")},
-				{Name: "技術的背景", Value: fallback(Truncate(item.Background, 600), "記事本文から詳細な技術的背景を抽出できませんでした")},
-				{Name: "開発者・学生への影響", Value: fallback(Truncate(item.Impact, 600), "開発者への具体的な影響は元記事を確認してください")},
-				{Name: "次に確認すべき点", Value: fallback(Truncate(item.Next, 600), "リリースノートまたは公式ドキュメントの確認を推奨します")},
 			},
 		}
+		if !item.Generated {
+			embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+				Name: "技術的背景", Value: fallback(Truncate(item.Background, 600), "記事本文から詳細な技術的背景を抽出できませんでした"),
+			})
+		}
+		embed.Fields = append(embed.Fields,
+			&discordgo.MessageEmbedField{Name: "開発者・学生への影響", Value: fallback(Truncate(item.Impact, 600), "開発者への具体的な影響は元記事を確認してください")},
+			&discordgo.MessageEmbedField{Name: "次に確認すべき点", Value: fallback(Truncate(item.Next, 600), "リリースノートまたは公式ドキュメントの確認を推奨します")},
+		)
 		if image := safeHTTPURL(item.ImageURL, true); image != "" {
 			embed.Image = &discordgo.MessageEmbedImage{URL: image}
 		}
@@ -74,6 +89,45 @@ func BuildEmbeds(brief Briefing) []*discordgo.MessageEmbed {
 		})
 	}
 	return embeds
+}
+
+// BuildPreviewEmbeds fits the briefing into one ephemeral response. When the
+// full embeds span messages, fit the field values within the remaining budget
+// while keeping titles, source metadata, links and summary labels.
+func BuildPreviewEmbeds(brief Briefing) ([]*discordgo.MessageEmbed, error) {
+	embeds := BuildEmbeds(brief)
+	batches, err := PackEmbeds(embeds)
+	if err != nil || len(batches) <= 1 {
+		return embeds, err
+	}
+	baseUnits, fieldCount := 0, 0
+	for _, embed := range embeds {
+		baseUnits += EmbedCharacters(embed)
+		for _, field := range embed.Fields {
+			baseUnits -= Units(field.Value)
+			fieldCount++
+		}
+	}
+	if len(embeds) > MaxEmbedsPerMessage || baseUnits >= MaxEmbedTotal || fieldCount == 0 {
+		return nil, errors.New("briefing metadata exceeds the Discord preview limit")
+	}
+	fieldBudget := (MaxEmbedTotal - baseUnits) / fieldCount
+	if fieldBudget < 1 {
+		return nil, errors.New("briefing summary fields exceed the Discord preview limit")
+	}
+	for _, embed := range embeds {
+		for _, field := range embed.Fields {
+			// Keep the article link in the title. Omit a follow-up link
+			// that would otherwise be cut in the middle of the URL.
+			if Units(field.Value) > fieldBudget && field.Name == "次に確認すべき点" {
+				if start := strings.LastIndex(field.Value, "\n"); start >= 0 {
+					field.Value = field.Value[:start]
+				}
+			}
+			field.Value = Truncate(field.Value, fieldBudget)
+		}
+	}
+	return embeds, nil
 }
 
 func PackEmbeds(embeds []*discordgo.MessageEmbed) ([][]*discordgo.MessageEmbed, error) {

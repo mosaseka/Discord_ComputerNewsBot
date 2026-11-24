@@ -17,6 +17,7 @@ import (
 	"github.com/mosaseka/Discord_ComputerNewsBot/internal/httpclient"
 	"github.com/mosaseka/Discord_ComputerNewsBot/internal/scheduler"
 	"github.com/mosaseka/Discord_ComputerNewsBot/internal/storage"
+	"github.com/mosaseka/Discord_ComputerNewsBot/internal/summarizer"
 )
 
 const runTimeout = 5 * time.Minute
@@ -76,6 +77,9 @@ func New(ctx context.Context, cfg config.Config, feeds []config.Feed, logger *sl
 	}
 	application.brief = &brief.Service{
 		Config: cfg, Feeds: feeds, Store: store, HTTP: httpClient, Publisher: publisher, Logger: logger,
+	}
+	if httpClient != nil && cfg.GeminiEnabled && cfg.GeminiAPIKey != "" {
+		application.brief.Gemini = summarizer.NewGemini(httpClient, cfg.GeminiAPIKey)
 	}
 	return application, nil
 }
@@ -287,15 +291,14 @@ func (a *App) runInteraction(session *discordgo.Session, event *discordgo.Intera
 			a.editInteraction(session, event, "対象期間に投稿可能な記事はありませんでした。", nil)
 			return
 		}
-		embeds := discordout.BuildEmbeds(result.Brief)
-		batches, packErr := discordout.PackEmbeds(embeds)
-		if packErr == nil && len(batches) == 1 {
-			a.editInteraction(session, event, "", batches[0])
+		embeds, packErr := discordout.BuildPreviewEmbeds(result.Brief)
+		if packErr == nil {
+			a.editInteraction(session, event, "", embeds)
 			return
 		}
 		var compact strings.Builder
 		for i, item := range result.Brief.Items {
-			fmt.Fprintf(&compact, "%d. %s\n%s\n", i+1, item.Title, item.URL)
+			fmt.Fprintf(&compact, "%d. %s（%s）\n%s\n", i+1, item.Title, item.SummaryLabel(), item.URL)
 		}
 		a.editInteraction(session, event, discordout.Truncate(compact.String(), discordout.MaxMessageContent), nil)
 		return

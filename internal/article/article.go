@@ -25,7 +25,8 @@ type Link struct {
 
 // Article is the shared value passed through collection, enrichment, ranking,
 // summarization, persistence, and publishing. Content and Description may
-// contain markup from a feed. Body is extracted plain text when available.
+// contain markup from a feed. Body is extracted plain text from either the
+// feed or an article page. HasFetchedBody distinguishes article-page text.
 type Article struct {
 	GUID            string
 	Title           string
@@ -37,6 +38,7 @@ type Article struct {
 	Description     string
 	Content         string
 	Body            string
+	HasFetchedBody  bool
 	PublishedAt     *time.Time
 	UpdatedAt       *time.Time
 	Authors         []string

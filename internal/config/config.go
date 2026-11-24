@@ -46,6 +46,8 @@ type Config struct {
 	MaxArticleBytes      int64
 	ArticleFetchEnabled  bool
 	CommandStatusPublic  bool
+	GeminiEnabled        bool
+	GeminiAPIKey         string
 	Mode                 Mode
 }
 
@@ -101,6 +103,14 @@ func Load(mode Mode) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	geminiEnabled, err := envBool("GEMINI_ENABLED", false)
+	if err != nil {
+		return Config{}, errors.New("GEMINI_ENABLED must be a boolean")
+	}
+	var geminiAPIKey string
+	if geminiEnabled && mode.Fixture == "" {
+		geminiAPIKey = strings.TrimSpace(os.Getenv("GEMINI_API_KEY"))
+	}
 	allowed, err := parseSnowflakes(os.Getenv("DISCORD_ALLOWED_USER_IDS"))
 	if err != nil {
 		return Config{}, fmt.Errorf("DISCORD_ALLOWED_USER_IDS: %w", err)
@@ -127,6 +137,8 @@ func Load(mode Mode) (Config, error) {
 		MaxArticleBytes:      maxBytes,
 		ArticleFetchEnabled:  articleFetch,
 		CommandStatusPublic:  statusPublic,
+		GeminiEnabled:        geminiEnabled,
+		GeminiAPIKey:         geminiAPIKey,
 		Mode:                 mode,
 	}
 	if err := cfg.validateMode(); err != nil {
