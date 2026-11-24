@@ -23,15 +23,45 @@ func TestFixtureApplicationDoesNotConstructHTTPClient(t *testing.T) {
 	loc, _ := time.LoadLocation("Asia/Tokyo")
 	cfg := config.Config{
 		Location: loc, DatabasePath: filepath.Join(t.TempDir(), "bot.db"),
-		Mode: config.Mode{Once: true, DryRun: true, Fixture: "fixtures"},
+		Mode: config.Mode{Once: true, DryRun: true, Fixture: "fixtures"}, GeminiEnabled: true, GeminiAPIKey: "test",
 	}
 	a, err := New(context.Background(), cfg, nil, nil)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	defer a.Close()
-	if a.http != nil {
-		t.Fatal("fixture application constructed an HTTP client")
+	if a.http != nil || a.brief.Gemini != nil {
+		t.Fatal("fixture application constructed an HTTP or Gemini client")
+	}
+}
+
+func TestDryRunGeminiRequiresEnableAndKey(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		enabled bool
+		key     string
+		want    bool
+	}{
+		{"disabled", false, "test", false},
+		{"missing key", true, "", false},
+		{"enabled", true, "test", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.Config{
+				Mode:          config.Mode{Once: true, DryRun: true},
+				DatabasePath:  filepath.Join(t.TempDir(), "bot.db"),
+				GeminiEnabled: tc.enabled,
+				GeminiAPIKey:  tc.key,
+			}
+			a, err := New(context.Background(), cfg, nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer a.Close()
+			if (a.brief.Gemini != nil) != tc.want {
+				t.Fatal("unexpected Gemini availability")
+			}
+		})
 	}
 }
 

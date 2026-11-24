@@ -49,6 +49,35 @@ func TestBuildEmbedsRejectsUnsafeImage(t *testing.T) {
 	}
 }
 
+func TestPreviewCompactsBothSummaryMethods(t *testing.T) {
+	brief := Briefing{PriorityTitle: "上位トピック"}
+	long := strings.Repeat("👨‍👩‍👧‍👦要約", 150)
+	for i := range 5 {
+		brief.Items = append(brief.Items, Item{
+			Title: "記事", URL: "https://example.test/article", Summary: long, Background: long,
+			Impact: long, Next: long, Generated: i%2 == 0,
+		})
+	}
+	embeds, err := BuildPreviewEmbeds(brief)
+	if err != nil || len(embeds) != 6 {
+		t.Fatalf("preview embeds = %d, err = %v", len(embeds), err)
+	}
+	batches, err := PackEmbeds(embeds)
+	if err != nil || len(batches) != 1 {
+		t.Fatalf("preview batches = %d, err = %v", len(batches), err)
+	}
+	for i, item := range brief.Items {
+		embed := embeds[i]
+		if embed.URL != item.URL || embed.Footer.Text != item.SummaryLabel() ||
+			!strings.HasSuffix(embed.Fields[0].Value, "…") || !utf8.ValidString(embed.Fields[0].Value) {
+			t.Fatalf("article %d lost its summary or metadata", i)
+		}
+		if (len(embed.Fields) == 3) != item.Generated {
+			t.Fatalf("article %d has unexpected summary fields", i)
+		}
+	}
+}
+
 func TestNonceIsStableAndShort(t *testing.T) {
 	a := Nonce("1", "2026-07-11", "run", 0)
 	b := Nonce("1", "2026-07-11", "run", 0)

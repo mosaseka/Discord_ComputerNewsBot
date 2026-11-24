@@ -75,6 +75,30 @@ func TestLoadFixtureForcesDryRun(t *testing.T) {
 	}
 }
 
+func TestLoadGeminiOnlyUsesKeyWhenEnabledOutsideFixture(t *testing.T) {
+	live := Mode{Once: true, DryRun: true}
+	t.Setenv("GEMINI_API_KEY", "test")
+	t.Setenv("GEMINI_ENABLED", "")
+	disabled, err := Load(live)
+	if err != nil || disabled.GeminiEnabled || disabled.GeminiAPIKey != "" {
+		t.Fatal("Gemini should default to disabled")
+	}
+	t.Setenv("GEMINI_ENABLED", "true")
+	enabled, err := Load(live)
+	if err != nil || !enabled.GeminiEnabled || enabled.GeminiAPIKey != "test" {
+		t.Fatal("live dry-run should load Gemini configuration")
+	}
+	fixture, err := Load(Mode{Once: true, Fixture: "fixtures"})
+	if err != nil || !fixture.Mode.DryRun || fixture.GeminiAPIKey != "" {
+		t.Fatal("fixture should ignore the Gemini key")
+	}
+	t.Setenv("GEMINI_API_KEY", "")
+	missingKey, err := Load(live)
+	if err != nil || !missingKey.GeminiEnabled || missingKey.GeminiAPIKey != "" {
+		t.Fatal("a missing Gemini key should allow fallback")
+	}
+}
+
 func TestLoadRejectsPostingWithoutDiscord(t *testing.T) {
 	t.Setenv("DISCORD_BOT_TOKEN", "")
 	t.Setenv("DISCORD_CHANNEL_ID", "")

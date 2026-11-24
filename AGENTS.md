@@ -2,15 +2,15 @@
 
 ## 目的
 
-このrepositoryは、公開RSS／Atomと許可された記事ページから日本語プログラミングニュースを収集し、決定論的な抽出型briefingをDiscordへ投稿するGo applicationです。
+このrepositoryは、公開RSS／Atomと許可された記事ページから日本語プログラミングニュースを収集し、既定では決定論的な抽出型briefingをDiscordへ投稿するGo applicationです。明示的に有効化した場合は、選定後の記事をGemini Developer APIで要約できます。
 
 ## 絶対条件
 
-- LLM、local LLM、生成AI API、有料API、API key型news serviceを追加しない。
-- 実行時通信は、設定済みfeed、許可された記事ページと`robots.txt`、Discord公式APIに限定する。
+- LLM、local LLM、生成AI API、有料API、API key型news serviceを追加しない。例外は、`GEMINI_ENABLED=true`で明示的に有効化したGemini Developer APIによる選定済み記事の要約だけとする。
+- 実行時通信は、設定済みfeed、許可された記事ページと`robots.txt`、Discord公式API、および明示的に有効化した場合のGemini公式`generateContent`エンドポイントに限定する。
 - secret、Bot Token、credential、実在するprivate IDをsource、fixture、test、log、command引数へ記録しない。
 - `.env`を自動読込しない。`.env.example`には空値または安全な既定値だけを置く。
-- 記事本文をSQLite、debug log、test snapshotへ保存しない。
+- 記事本文をSQLite、debug log、test snapshotへ保存しない。Geminiへの入力本文とAPIの生レスポンスもログへ出力しない。
 - 自動testから実サイト、Discord、DNS、その他のexternal serviceへ接続しない。`httptest`、fake、fixtureを使う。
 - SSRF、DNS rebinding、redirect再検証、response size、MIME、robots、rate limitの境界を弱めない。
 - Discord Message Content Intentを要求しない。Bot権限はView Channels、Send Messages、Embed Linksに留める。
@@ -21,7 +21,7 @@
 - `internal/app`, `internal/brief`: orchestration、scheduler、Discord command
 - `internal/httpclient`, `internal/security`: 唯一のoutbound HTTP境界
 - `internal/feed`, `internal/htmlparser`: feed／HTML解析
-- `internal/article`, `internal/ranking`, `internal/summarizer`: 正規化、重複排除、選定、抽出型要約
+- `internal/article`, `internal/ranking`, `internal/summarizer`: 正規化、重複排除、選定、抽出型要約と任意のGemini要約
 - `internal/discord`: Discord render／publish
 - `internal/storage`, `migrations`: SQLiteと監査状態
 - `testdata`: 完全offline fixture
@@ -33,7 +33,7 @@ package間の責務を保ち、HTTP取得やDiscord送信を別経路で直接�
 - Go 1.25を基準にし、標準libraryを優先する。
 - Go codeは`gofmt`を適用し、errorをcontext付きでwrapする。library codeでpanicしない。
 - wall clock、network、publisher、resolverはtest可能な境界から注入する。
-- ranking、tie-breaker、要約、nonce、fixtureは同じ入力から同じ結果になるよう維持する。
+- ranking、tie-breaker、抽出型要約、nonce、fixtureは同じ入力から同じ結果になるよう維持する。fixtureではGeminiを無効にする。
 - 表示原文とNFKC済み比較textを混同しない。Unicodeの切詰めはgrapheme境界とDiscordのUTF-16上限を守る。
 - partial failureはfeed単位で隔離し、監査可能な状態と安全なfallbackを残す。
 - migrationはappend-onlyで追加する。既存migrationを変更せず、transactionとchecksum検証を維持する。
@@ -44,7 +44,7 @@ package間の責務を保ち、HTTP取得やDiscord送信を別経路で直接�
 
 新規dependencyを追加する前に、標準libraryや既存dependencyで実現できない理由を明示してください。license、release／保守状況、module graph、supply-chain risk、Windows対応、CGO要否、binary sizeを確認します。versionを固定し、`go mod tidy`と`go mod verify`を実行します。
 
-特に、LLM client、telemetry SaaS、外部summarization、paid news API、CGO必須SQLiteへの置換は禁止です。
+Geminiへの通信は既存の`internal/httpclient`を使います。LLM向けSDK、telemetry SaaS、その他の外部summarization、paid news API、CGO必須SQLiteへの置換は禁止です。
 
 ## Test
 

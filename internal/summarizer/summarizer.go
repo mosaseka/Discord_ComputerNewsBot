@@ -1,5 +1,5 @@
-// Package summarizer implements deterministic, extractive summaries for
-// Japanese programming news. It does not generate or translate text.
+// Package summarizer implements extractive and optional Gemini summaries for
+// Japanese programming news.
 package summarizer
 
 import (
